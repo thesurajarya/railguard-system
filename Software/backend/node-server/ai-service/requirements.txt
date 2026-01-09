@@ -3,3 +3,6 @@ uvicorn
 scikit-learn
 numpy
 pydantic
+matplotlib
+scipy
+scikit-learn
