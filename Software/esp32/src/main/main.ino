@@ -11,7 +11,7 @@
 // ===============================
 // 1. NETWORK CONFIGURATION
 // ===============================
-const char* ssid = "One Plus Nord 3";
+const char* ssid = "OnePlusNord3";
 const char* password = "hp97omltp";
 const char* mqtt_server = "broker.hivemq.com"; 
 const char* node_id = "TRACK_SEC_42";
