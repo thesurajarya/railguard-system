@@ -5,24 +5,16 @@ import joblib
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix
-)
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-MODEL_FILE = "isolation_forest.pkl"
+DATA_FILE   = "training_features.csv"
+MODEL_FILE  = "isolation_forest.pkl"
 SCALER_FILE = "scaler.pkl"
 
-FEATURE_COLUMNS = [
+FEATURES = [
     "accel_mag",
     "delta_accel_mag",
-    "accel_roll_mean",
-    "accel_roll_std",
-    "accel_roll_rms",
-    "accel_roll_range",
+    "accel_std",
     "mag_norm",
     "delta_mag_norm",
     "TEMPERATURE",
@@ -30,74 +22,67 @@ FEATURE_COLUMNS = [
     "PRESSURE"
 ]
 
-def train():
-    # --------------------------------------------------
-    # 1) LOAD FEATURE DATA
-    # --------------------------------------------------
-    df = pd.read_csv("training_features.csv")
+df = pd.read_csv(DATA_FILE)
 
-    X = df[FEATURE_COLUMNS].fillna(0)
-    y = df["is_anomaly"].astype(int)  # 1 = anomaly, 0 = normal
+X = df[FEATURES].fillna(0)
 
-    # --------------------------------------------------
-    # 2) TRAIN / TEST SPLIT (80–20)
-    # --------------------------------------------------
+# ------------------------------------
+# OPTIONAL: supervised evaluation
+# ------------------------------------
+HAS_LABELS = "is_anomaly" in df.columns
+
+if HAS_LABELS:
+    y = df["is_anomaly"].astype(int)
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        random_state=42,
-        stratify=y
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
+else:
+    X_train = X
+    X_test  = X.copy()
 
-    # --------------------------------------------------
-    # 3) SCALE (FIT ONLY ON TRAIN → NO LEAKAGE)
-    # --------------------------------------------------
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled  = scaler.transform(X_test)
+# ------------------------------------
+# SCALE (NO LEAKAGE)
+# ------------------------------------
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled  = scaler.transform(X_test)
 
-    # --------------------------------------------------
-    # 4) TRAIN ISOLATION FOREST (ONLY ON TRAIN DATA)
-    # --------------------------------------------------
-    model = IsolationForest(
-        n_estimators=300,
-        contamination=y_train.mean(),  # smart contamination
-        random_state=42
-    )
+# ------------------------------------
+# TRAIN ONLY ON NORMAL DATA
+# ------------------------------------
+if HAS_LABELS:
+    X_train_normal = X_train_scaled[y_train == 0]
+else:
+    X_train_normal = X_train_scaled
 
-    model.fit(X_train_scaled)
+model = IsolationForest(
+    n_estimators=300,
+    contamination=0.05,
+    random_state=42,
+    n_jobs=-1
+)
 
-    # --------------------------------------------------
-    # 5) EVALUATE ON TEST DATA
-    # --------------------------------------------------
-    # Isolation Forest outputs:
-    #  -1 → anomaly
-    #   1 → normal
-    y_pred_raw = model.predict(X_test_scaled)
+model.fit(X_train_normal)
 
-    # Convert to 1 = anomaly, 0 = normal
-    y_pred = np.where(y_pred_raw == -1, 1, 0)
+# ------------------------------------
+# EVALUATION (IF LABELS EXIST)
+# ------------------------------------
+if HAS_LABELS:
+    preds = model.predict(X_test_scaled)
+    preds = np.where(preds == -1, 1, 0)
 
-    print("\n📊 MODEL EVALUATION (TEST SET)")
-    print("Confusion Matrix:")
-    print(confusion_matrix(y_test, y_pred))
+    print("\n📊 Evaluation:")
+    print(confusion_matrix(y_test, preds))
+    print("Accuracy :", accuracy_score(y_test, preds))
+    print("Precision:", precision_score(y_test, preds))
+    print("Recall   :", recall_score(y_test, preds))
+    print("F1-score :", f1_score(y_test, preds))
 
-    print("\nMetrics:")
-    print("Accuracy :", round(accuracy_score(y_test, y_pred), 4))
-    print("Precision:", round(precision_score(y_test, y_pred), 4))
-    print("Recall   :", round(recall_score(y_test, y_pred), 4))
-    print("F1-score :", round(f1_score(y_test, y_pred), 4))
+# ------------------------------------
+# SAVE
+# ------------------------------------
+joblib.dump(model, MODEL_FILE)
+joblib.dump(scaler, SCALER_FILE)
 
-    # --------------------------------------------------
-    # 6) SAVE MODEL & SCALER
-    # --------------------------------------------------
-    joblib.dump(model, MODEL_FILE)
-    joblib.dump(scaler, SCALER_FILE)
-
-    print("\n✅ Model saved as:", MODEL_FILE)
-    print("✅ Scaler saved as:", SCALER_FILE)
-
-
-if __name__ == "__main__":
-    train()
+print("\n✅ Model & scaler saved")

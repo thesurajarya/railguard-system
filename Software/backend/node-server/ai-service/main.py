@@ -1,152 +1,126 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import pandas as pd
+import json
 import numpy as np
+import pandas as pd
 import joblib
-import os
-from collections import defaultdict, deque
 
-app = FastAPI()
+# ===============================
+# LOAD MODEL & SCALER
+# ===============================
+MODEL_FILE  = "isolation_forest.pkl"
+SCALER_FILE = "scaler.pkl"
 
-# -----------------------------
-# Load Model
-# -----------------------------
-if os.path.exists("isolation_forest.pkl") and os.path.exists("scaler.pkl"):
-    model = joblib.load("isolation_forest.pkl")
-    scaler = joblib.load("scaler.pkl")
-    print("✅ AI Model Loaded")
-else:
-    model = None
-    scaler = None
-    print("⚠️ No model found, running in Rule-Based Mode")
+model  = joblib.load(MODEL_FILE)
+scaler = joblib.load(SCALER_FILE)
 
-FEATURE_COLUMNS = [
-    "accel_mag", "delta_accel_mag", "accel_roll_mean", "accel_roll_std",
-    "accel_roll_rms", "accel_roll_range", "mag_norm", "delta_mag_norm",
-    "TEMPERATURE", "HUMIDITY", "PRESSURE"
+# ===============================
+# FEATURES (MUST MATCH TRAINING)
+# ===============================
+FEATURES = [
+    "accel_mag",
+    "delta_accel_mag",
+    "accel_std",
+    "mag_norm",
+    "delta_mag_norm",
+    "TEMPERATURE",
+    "HUMIDITY",
+    "PRESSURE"
 ]
 
-# -----------------------------
-# IMPROVEMENT: Per-Node Buffers
-# -----------------------------
-# Dictionary where key=node_id, value=rolling_buffer_list
-node_buffers = defaultdict(lambda: [])
-WINDOW = 40
+# ===============================
+# FIXED SENSOR LOCATION
+# ===============================
+SENSOR_LOCATION = {
+    "track_section": "TRACK_SEC_42",
+    "latitude": 28.6139,
+    "longitude": 77.2090
+}
 
-class SensorInput(BaseModel):
-    node_id: str
-    timestamp: int
-    latitude: float
-    longitude: float
-    accel_x: float
-    accel_y: float
-    accel_z: float
-    mag_x: float
-    mag_y: float
-    mag_z: float
-    heading: float
-    tilt: int
-    tilt_alert: bool
-    accel_mag: float
-    accel_roll_rms: float
-    mag_norm: float
-    mic_level: float
-    temperature: float
-    humidity: float
-    pressure: float
+# ===============================
+# THRESHOLDS (TUNABLE LATER)
+# ===============================
+VIBRATION_SCORE_THRESHOLD = -0.05   # lower = more anomalous
 
-@app.post("/predict")
-def predict(data: SensorInput):
-    try:
-        # 1. Get buffer specific to this node
-        buffer = node_buffers[data.node_id]
+# ===============================
+# CORE PREDICTION FUNCTION
+# ===============================
+def process_sensor_packet(packet: dict):
 
-        # 2. Server-Side Calculation (Trust this over ESP32 for internal logic)
-        current_accel_mag = np.sqrt(data.accel_x**2 + data.accel_y**2 + data.accel_z**2)
+    # ---- Build feature row ----
+    row = {
+        "accel_mag": packet["accel_mag"],
+        "delta_accel_mag": packet.get("delta_accel_mag", 0),
+        "accel_std": packet.get("accel_std", 0),
+        "mag_norm": packet["mag_norm"],
+        "delta_mag_norm": packet.get("delta_mag_norm", 0),
+        "TEMPERATURE": packet["temperature"],
+        "HUMIDITY": packet["humidity"],
+        "PRESSURE": packet["pressure"]
+    }
 
-        buffer.append(current_accel_mag)
-        if len(buffer) > WINDOW:
-            buffer.pop(0)
+    df = pd.DataFrame([row])
+    X_scaled = scaler.transform(df[FEATURES])
 
-        # 3. Calculate Rolling Stats
-        accel_roll_mean = float(np.mean(buffer))
-        accel_roll_std  = float(np.std(buffer)) if len(buffer) > 1 else 0.0
-        accel_roll_rms  = float(np.sqrt(np.mean(np.square(buffer))))
-        accel_roll_range = float(max(buffer) - min(buffer)) if len(buffer) > 1 else 0.0
+    # ---- Vibration anomaly ----
+    anomaly_score = model.decision_function(X_scaled)[0]
+    vibration_anomaly = anomaly_score < VIBRATION_SCORE_THRESHOLD
 
-        # --- ANOMALY LOGIC ---
-        is_anomaly = False
-        severity = "LOW"
-        anomaly_score = 0.0
+    # ---- Other sensors ----
+    tilt_alert = packet.get("tilt_alert", False)
+    mic_anomaly = packet.get("mic_anomaly", False)  # optional
 
-        # Rule 1: Tilt
-        if data.tilt == 0:
-            is_anomaly = True
-            severity = "CRITICAL"
-            anomaly_score = 0.98
-            print(f"🚨 TILT DETECTED at {data.node_id}")
+    # ---- Final fusion ----
+    final_alert = vibration_anomaly or tilt_alert or mic_anomaly
 
-        # Rule 2: Vibration (Using server calculated value)
-        elif current_accel_mag > 2.5:
-            is_anomaly = True
-            severity = "HIGH"
-            anomaly_score = min(current_accel_mag / 4.0, 1.0)
+    # ---- Reasoning ----
+    reasons = []
+    if vibration_anomaly:
+        reasons.append("abnormal_vibration")
+    if tilt_alert:
+        reasons.append("tilt_detected")
+    if mic_anomaly:
+        reasons.append("tool_sound_detected")
 
-        # Rule 3: AI Model
-        elif model and scaler:
-            # Note: delta_accel_mag is hardcoded to 0 for stream simplicity.
-            # ideally, you would calculate (current - previous) here.
-            feature_row = pd.DataFrame([{
-                "accel_mag": current_accel_mag,
-                "delta_accel_mag": 0, 
-                "accel_roll_mean": accel_roll_mean,
-                "accel_roll_std": accel_roll_std,
-                "accel_roll_rms": accel_roll_rms,
-                "accel_roll_range": accel_roll_range,
-                "mag_norm": data.mag_norm,
-                "delta_mag_norm": 0,
-                "TEMPERATURE": data.temperature,
-                "HUMIDITY": data.humidity,
-                "PRESSURE": data.pressure
-            }])
+    # ---- Final output ----
+    output = {
+    "node_id": str(packet["node_id"]),
+    "timestamp": str(packet["timestamp"]),
+    "location": SENSOR_LOCATION,
 
-            X_scaled = scaler.transform(feature_row[FEATURE_COLUMNS])
-            prediction = model.predict(X_scaled)[0]
-            score = model.decision_function(X_scaled)[0]
+    "anomaly_score": float(anomaly_score),
 
-            if prediction == -1:
-                is_anomaly = True
-                severity = "MEDIUM"
-                anomaly_score = abs(float(score))
+    "vibration_anomaly": bool(vibration_anomaly),
+    "tilt_alert": bool(tilt_alert),
+    "mic_anomaly": bool(mic_anomaly),
 
-        return {
-            "node_id": data.node_id,
-            "is_anomaly": is_anomaly,
-            "severity": severity,
-            "anomaly_score": round(anomaly_score, 2),
-            "ai_decision": {
-                "tilt_detected": data.tilt == 0,
-                "vibration_peak": round(current_accel_mag, 3),
-                "rolling_rms": round(accel_roll_rms, 3),
-                "mic_level": data.mic_level
-            },
-            "environment": {
-                "temp": data.temperature,
-                "hum": data.humidity
-            }
-        }
+    "final_alert": bool(final_alert),
+    "reasons": list(reasons)
+    }
 
-    except Exception as e:
-        print(f"Error processing: {e}")
-        # Return safe fallback instead of 500 error to keep system running
-        return {
-            "node_id": data.node_id,
-            "is_anomaly": False,
-            "severity": "LOW",
-            "anomaly_score": 0.0,
-            "ai_decision": {"error": str(e)}
-        }
+    return output
 
+# ===============================
+# TEST WITH SAMPLE JSON
+# ===============================
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+
+    sample_packet = {
+        "node_id": "TRACK_SEC_42",
+        "timestamp": "2026-01-12T10:32:00Z",
+
+        "accel_mag": 1025.4,
+        "delta_accel_mag": 62.1,
+        "accel_std": 28.4,
+
+        "mag_norm": 1112.6,
+        "delta_mag_norm": 4.9,
+
+        "temperature": 26.8,
+        "humidity": 31.2,
+        "pressure": 94740.5,
+
+        "tilt_alert": False,
+        "mic_anomaly": False
+    }
+
+    result = process_sensor_packet(sample_packet)
+    print(json.dumps(result, indent=2))
