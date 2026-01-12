@@ -1,14 +1,2 @@
 [
-  {
-    "id": 1768194245744,
-    "nodeId": "TRACK_SEC_42",
-    "lat": 28.6139,
-    "lng": 77.209,
-    "locationName": "New Delhi Central",
-    "severity": "HIGH",
-    "status": "ACTIVE",
-    "isConstruction": false,
-    "timestamp": "2026-01-12T05:04:05.744Z",
-    "last_seen": "2026-01-12T05:04:05.744Z"
-  }
 ]
