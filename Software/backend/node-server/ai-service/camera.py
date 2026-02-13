@@ -1,32 +1,33 @@
+# camera.py
 import cv2
 import os
 import time
 
-VIDEO_DIR = "live_frames"
-os.makedirs(VIDEO_DIR, exist_ok=True)
+CAMERA_INDEX = 0   # laptop webcam
+IMAGE_DIR = "captured_frames"
 
-cap = None
+os.makedirs(IMAGE_DIR, exist_ok=True)
 
-def start_camera():
-    global cap
-    if cap is None:
-        cap = cv2.VideoCapture(0)
+def capture_image():
+    """
+    Captures a single frame from webcam and saves it
+    Returns image path or None
+    """
+    cap = cv2.VideoCapture(CAMERA_INDEX)
 
-def get_frame():
-    global cap
-    if cap is None:
-        start_camera()
-
-    ret, frame = cap.read()
-    if not ret:
+    if not cap.isOpened():
+        print("❌ Camera not accessible")
         return None
 
-    filename = f"{VIDEO_DIR}/frame_{int(time.time()*1000)}.jpg"
-    cv2.imwrite(filename, frame)
-    return filename
+    ret, frame = cap.read()
+    cap.release()
 
-def stop_camera():
-    global cap
-    if cap:
-        cap.release()
-        cap = None
+    if not ret:
+        print("❌ Failed to capture image")
+        return None
+
+    filename = f"frame_{int(time.time())}.jpg"
+    path = os.path.join(IMAGE_DIR, filename)
+
+    cv2.imwrite(path, frame)
+    return path
