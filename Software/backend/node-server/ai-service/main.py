@@ -5,6 +5,7 @@ from fusion import fuse_results
 
 from fastapi import FastAPI
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles # Added for serving images
 import pandas as pd
 import numpy as np
 import joblib
@@ -16,6 +17,11 @@ from collections import defaultdict, deque
 # 1. INITIALIZE SERVER
 # ===============================
 app = FastAPI()
+
+# NEW: Serve the captured_frames folder so the Dashboard can access the JPGs
+IMAGE_DIR = "captured_frames"
+os.makedirs(IMAGE_DIR, exist_ok=True)
+app.mount("/captured_frames", StaticFiles(directory=IMAGE_DIR), name="captured_frames")
 
 print("\n" + "=" * 60)
 print("AI SERVICE LOADED: MULTIMODAL (VIBRATION → LIVE VISION)")
@@ -38,7 +44,6 @@ if os.path.exists(MODEL_FILE) and os.path.exists(SCALER_FILE):
 else:
     print("==> ML model not found → Physics-only fallback")
 
-# ⚠️ MUST MATCH TRAINING EXACTLY
 FEATURES = [
     "accel_mag",
     "accel_roll_mean",
@@ -64,38 +69,37 @@ COOLDOWN_SECONDS = 10
 class SensorInput(BaseModel):
     node_id: str
     timestamp: int
-
     accel_x: float
     accel_y: float
     accel_z: float
-
     mag_x: float
     mag_y: float
     mag_z: float
     heading: float
-
     temperature: float
     humidity: float
     pressure: float
-
     latitude: float = 0.0
     longitude: float = 0.0
     mic_level: float = 0.0
     frequency: float = 0.0
 
 # ===============================
-# 5. LIVE CAMERA CAPTURE (SAFE)
+# 5. LIVE CAMERA CAPTURE
 # ===============================
-def capture_live_frames(frames=5, interval=0.4):
+def capture_live_frames(frames=3, interval=0.5):
     images = []
+    # Ensure camera is ready
+    start_camera() 
     for _ in range(frames):
         try:
-            img = capture_image()
-            if img and os.path.exists(img):
-                images.append(img)
+            img_path = get_frame()
+            if img_path and os.path.exists(img_path):
+                images.append(img_path)
         except Exception as e:
             print("Camera error:", e)
         time.sleep(interval)
+    # stop_camera() # Keep open for prototype speed or close to save power
     return images
 
 # ===============================
@@ -104,20 +108,9 @@ def capture_live_frames(frames=5, interval=0.4):
 @app.post("/predict")
 def predict(data: SensorInput):
     try:
-        # ---------------------------
         # A. PHYSICS FEATURES
-        # ---------------------------
-        accel_mag = float(np.sqrt(
-            data.accel_x**2 +
-            data.accel_y**2 +
-            data.accel_z**2
-        ))
-
-        mag_norm = float(np.sqrt(
-            data.mag_x**2 +
-            data.mag_y**2 +
-            data.mag_z**2
-        ))
+        accel_mag = float(np.sqrt(data.accel_x**2 + data.accel_y**2 + data.accel_z**2))
+        mag_norm = float(np.sqrt(data.mag_x**2 + data.mag_y**2 + data.mag_z**2))
 
         buf = node_buffers[data.node_id]
         buf.append(accel_mag)
@@ -139,49 +132,43 @@ def predict(data: SensorInput):
             "PRESSURE": data.pressure
         }
 
-        # ---------------------------
         # B. VIBRATION ANOMALY
-        # ---------------------------
         vibration_anomaly = False
         vib_score = 0.0
         reasons = []
 
-        # Rule 1: Hard physical shock
         if accel_mag > 15.0:
             vibration_anomaly = True
             vib_score = min((accel_mag - 15.0) / 10.0, 1.0)
             reasons.append(f"Hard vibration |a|={accel_mag:.2f}")
-
-        # Rule 2: ML-based anomaly
         elif model and scaler:
             df = pd.DataFrame([feature_row])
             X_scaled = scaler.transform(df[FEATURES])
             score = float(model.decision_function(X_scaled)[0])
-
             if score < -0.05:
                 vibration_anomaly = True
                 vib_score = abs(score)
                 reasons.append("Abnormal vibration pattern (ML)")
 
-        # ---------------------------
         # C. LIVE VISION (EVENT-DRIVEN)
-        # ---------------------------
         vision_result = {
             "vision_anomaly": False,
             "vision_confidence": 0.0,
             "vision_reason": "Not triggered"
         }
+        latest_img_path = None
 
         now = time.time()
         if vibration_anomaly and (now - camera_cooldown[data.node_id] > COOLDOWN_SECONDS):
             camera_cooldown[data.node_id] = now
-
             frames = capture_live_frames()
+            
             votes = []
             confidences = []
-
+            
             for img in frames:
                 res = run_vlm(img)
+                latest_img_path = img # Save the path to return to dashboard
                 votes.append(res.get("vision_anomaly", False))
                 confidences.append(res.get("vision_confidence", 0.0))
 
@@ -192,34 +179,27 @@ def predict(data: SensorInput):
                     "vision_reason": "Suspicious object/person detected"
                 }
 
-        # ---------------------------
         # D. MULTIMODAL FUSION
-        # ---------------------------
         final_decision = fuse_results(
             vibration_result={"score": vib_score},
             vision_result=vision_result
         )
 
-        # ---------------------------
         # E. RESPONSE (FRONTEND SAFE)
-        # ---------------------------
         return {
             "node_id": data.node_id,
-
             "final_alert": bool(final_decision["final_alert"]),
             "severity": str(final_decision["severity"]),
             "final_score": float(final_decision["final_score"]),
-
             "vibration_score": float(vib_score),
             "vision_score": float(vision_result["vision_confidence"]),
-
-            "reasons": reasons,
-
-            "location": {
-                "lat": float(data.latitude),
-                "lng": float(data.longitude)
+            "vlm_analysis": {
+                "vision_reason": vision_result["vision_reason"],
+                "vision_confidence": vision_result["vision_confidence"]
             },
-
+            "image_url": latest_img_path, # Path to the specific frame
+            "reasons": reasons,
+            "location": {"lat": float(data.latitude), "lng": float(data.longitude)},
             "telemetry": {
                 "accel_mag": accel_mag,
                 "mag_norm": mag_norm,
@@ -231,15 +211,8 @@ def predict(data: SensorInput):
 
     except Exception as e:
         print("❌ ERROR:", e)
-        return {
-            "final_alert": False,
-            "severity": "LOW",
-            "error": str(e)
-        }
+        return {"final_alert": False, "severity": "LOW", "error": str(e)}
 
-# ===============================
-# 7. RUN SERVER
-# ===============================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=5000)
