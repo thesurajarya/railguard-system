@@ -4,7 +4,6 @@ const aiService = require('../ai/aiService');
 const { broadcastUpdate } = require('../socket/socket');
 const { sendCriticalAlert } = require('../services/alertService');
 
-// Cooldown to prevent database spam (5 seconds)
 const ALERT_COOLDOWN = 5000; 
 let lastAlertTime = 0;
 
@@ -30,10 +29,10 @@ const connectMQTT = (onAnomalyCallback) => {
             // 1. Parse Data
             const rawData = JSON.parse(msgString);
             
-            // 2. Broadcast Raw Data (Live Graph) - ALWAYS do this
+            // 2. Broadcast Raw Data (Live Graph)
             broadcastUpdate({ ...rawData, is_anomaly: false, processing: true });
 
-            // 3. Get AI Prediction
+            // 3. Get Prediction (Now returns { is_anomaly, severity, vlm_analysis, image_url })
             const aiResult = await aiService.getPrediction(rawData);
             
             // 4. Merge Data
@@ -43,33 +42,30 @@ const connectMQTT = (onAnomalyCallback) => {
                 processed_at: new Date().toISOString()
             };
             
-            // 5. Update Dashboard with new Score - ALWAYS do this
+            // 5. Update Dashboard (Live Telemetry Tab)
             broadcastUpdate(enrichedData);
 
-            // 6. Handle Alerts (WITH COOLDOWN FIX)
+            // 6. Handle Alerts (Multimodal Verification)
             if(enrichedData.is_anomaly) {
                 const now = Date.now();
                 
-                // --- THE CRITICAL FIX IS HERE ---
                 if (now - lastAlertTime > ALERT_COOLDOWN) {
-                    
-                    // A. Update Timer
                     lastAlertTime = now;
 
-                    // B. Log & Process
-                    console.log(`🚨 ANOMALY: ${enrichedData.node_id} | Score: ${enrichedData.anomaly_score}`);
+                    console.log(`🚨 MULTIMODAL ALERT: ${enrichedData.node_id}`);
+                    console.log(`👁️ VLM Reasoning: ${enrichedData.vlm_analysis?.vision_reason}`);
                     
-                    // C. Trigger Database Save & Frontend Alert (ONLY HERE)
+                    // Trigger Database Save & Frontend Alert
                     if (onAnomalyCallback) {
+                        // This callback now passes the VLM data to the DataController
                         onAnomalyCallback(enrichedData);
                     }
 
-                    // D. Send Email (Non-blocking)
+                    // Send Email with Visual Context
                     sendCriticalAlert(enrichedData).catch(e => console.error("Email Error:", e.message));
 
                 } else {
-                    // E. Suppress
-                    console.log(`Alert suppressed for ${enrichedData.node_id} (Cooldown active)`);
+                    console.log(`Alert suppressed for ${enrichedData.node_id} (Cooldown)`);
                 }
             }
         } catch (err) {
