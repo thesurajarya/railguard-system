@@ -7,49 +7,51 @@ async function getPrediction(sensorData) {
             node_id: sensorData.node_id || "UNKNOWN",
             timestamp: sensorData.timestamp || Date.now(),
             
-            // GPS
-            latitude: sensorData.latitude || 0.0,
-            longitude: sensorData.longitude || 0.0,
+            // GPS Location
+            latitude: sensorData.latitude || 28.6139,
+            longitude: sensorData.longitude || 77.2090,
             
-            // Raw Sensors
+            // Raw Accelerometer & Magnetometer
             accel_x: sensorData.accel_x || 0.0,
             accel_y: sensorData.accel_y || 0.0,
             accel_z: sensorData.accel_z || 0.0,
             mag_x: sensorData.mag_x || 0.0,
             mag_y: sensorData.mag_y || 0.0,
             mag_z: sensorData.mag_z || 0.0,
-            
-            // New Fields
             heading: sensorData.heading || 0.0,
-            tilt: sensorData.tilt !== undefined ? sensorData.tilt : 1,
-            tilt_alert: sensorData.tilt_alert || false,
             
-            // Computed Features
-            accel_mag: sensorData.accel_mag || 0.0,
-            accel_roll_rms: sensorData.accel_roll_rms || 0.0,
-            mag_norm: sensorData.mag_norm || 0.0,
-            mic_level: sensorData.mic_level || 0.0,
-            
-            // Environment
+            // Environment & Audio
             temperature: sensorData.temperature || 0.0,
             humidity: sensorData.humidity || 0.0,
-            pressure: sensorData.pressure || 0.0
+            pressure: sensorData.pressure || 0.0,
+            mic_level: sensorData.mic_level || 0.0,
+            frequency: sensorData.frequency || 0.0
         };
 
-        // --- ADDING TIMEOUT (Prevents Server Freeze) ---
-        const response = await axios.post(config.ai.url, payload, { timeout: 2000 }); 
+        // INCREASED TIMEOUT: VLM inference (Qwen2-VL) is slow on CPU.
+        // We give it 45 seconds to avoid breaking the "Vision Feed" window.
+        const response = await axios.post(config.ai.url, payload, { 
+            timeout: 45000 
+        }); 
+
         return response.data;
 
     } catch (error) {
-        // Log but don't crash
-        // console.error("⚠️ AI Skipped:", error.message);
+        // Detailed logging for debugging VLM latency
+        if (error.code === 'ECONNABORTED') {
+            console.error("⚠️ AI SERVICE TIMEOUT: VLM took > 45s to respond.");
+        } else {
+            console.error("⚠️ AI SERVICE ERROR:", error.message);
+        }
         
-        // Return safe fallback so dashboard still gets raw data
+        // Fallback: Dashboard stays active but visual evidence is skipped
         return { 
-            is_anomaly: false, 
+            final_alert: false,
             severity: "LOW", 
-            anomaly_score: 0,
-            ai_decision: { note: "AI Timeout/Error" }
+            vibration_score: 0,
+            vision_score: 0,
+            reasons: ["AI Service Unavailable"],
+            vlm_analysis: { vision_reason: "AI Connection Error" }
         };
     }
 }
