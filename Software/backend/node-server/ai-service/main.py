@@ -1,4 +1,5 @@
-from camera import capture_image
+# from camera import capture_image
+from camera import start_camera, get_frame, stop_camera
 from vlm_model import run_vlm
 from fusion import fuse_results
 

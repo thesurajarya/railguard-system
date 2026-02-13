@@ -43,6 +43,7 @@ const icons = {
 // --- SOCKET CONFIGURATION ---
 const SOCKET_URL = "http://localhost:3000"; 
 const API_URL = "http://localhost:3000/api/alerts";
+const PYTHON_AI_URL = "http://localhost:5000"; // Added for fetching VLM images
 
 const socket = io(SOCKET_URL, { 
     autoConnect: false,
@@ -142,7 +143,11 @@ export default function Dashboard() {
             nodeId: newAlert.nodeId || newAlert.node_id || "UNKNOWN",
             lat: newAlert.lat || newAlert.latitude || STATION_LAT,
             lng: newAlert.lng || newAlert.longitude || STATION_LNG,
-            status: newAlert.status || 'OPEN'
+            status: newAlert.status || 'OPEN',
+            // Added for Visual Evidence Support
+            vlmImage: newAlert.image_url || null,
+            vlmReason: newAlert.vlm_analysis?.vision_reason || "Visual confirmation pending...",
+            vlmConfidence: newAlert.vlm_analysis?.vision_confidence || 0
         };
 
         setAlerts((prev) => {
@@ -255,12 +260,11 @@ export default function Dashboard() {
     container: { display: "flex", flexDirection: "column", height: "100vh", width: "100%", overflow: "hidden", fontFamily: "'Inter', system-ui, sans-serif", backgroundColor: "#0f172a", color: "#e2e8f0" },
     header: { height: "80px", background: "rgba(15, 23, 42, 0.95)", borderBottom: "1px solid #334155", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", flexShrink: 0, zIndex: 50 },
     
-    // Updated Logo Container - Pure White Background with more space
     logoContainer: { 
         display: "flex", alignItems: "center", gap: "16px", 
         background: "#ffffff", padding: "4px 12px", borderRadius: "8px", marginRight: "16px",
         boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-        height: "64px" // Increased container height
+        height: "64px" 
     },
     
     statusBadge: { display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: "999px" },
@@ -308,15 +312,12 @@ export default function Dashboard() {
       {/* HEADER WITH OFFICIAL LOGOS */}
       <header style={styles.header}>
         <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
-          {/* Logo Section - Now on White Background */}
           <div style={styles.logoContainer}>
              <img src={LOGO_EMBLEM} alt="Government of India" style={{ height: "100%", width: "auto" }} />
              <div style={{width: "1px", height: "40px", background: "#cbd5e1"}}></div>
-             {/* INCREASED IR LOGO SIZE */}
              <img src={IRLogo} alt="Indian Railways" style={{ height: "60px", width: "auto" }} onError={(e) => {e.target.onerror = null; e.target.src="https://via.placeholder.com/50"}}/>
           </div>
           
-          {/* Title Section */}
           <div>
             <h1 style={{ fontSize: "1.4rem", fontWeight: "800", letterSpacing: "-0.02em", color: "#f8fafc", margin: 0, lineHeight: 1 }}>RailGuard Command</h1>
             <div style={{ fontSize: "0.7rem", color: "#94a3b8", fontWeight: "600", marginTop: "4px", letterSpacing: "0.05em" }}>
@@ -325,9 +326,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right Controls */}
         <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-          {/* Make in India Badge - INCREASED SIZE */}
           <div style={{ background: "white", padding: "4px 12px", borderRadius: "6px", display: "flex", alignItems: "center", height: "55px" }}>
              <img src={MakeInIndiaLogo} alt="Make In India" style={{ height: "100%", width: "auto" }} onError={(e) => {e.target.onerror = null; e.target.src="https://via.placeholder.com/50"}} />
           </div>
@@ -352,13 +351,11 @@ export default function Dashboard() {
         {/* LEFT: MAP (LIGHT THEME) */}
         <div style={styles.leftPanel}>
           <MapContainer center={[STATION_LAT, STATION_LNG]} zoom={16} zoomControl={false} style={{ height: "100%" }}>
-            {/* 1. Base Layer: Standard Light OSM */}
             <TileLayer 
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
                 attribution='&copy; OpenStreetMap' 
                 maxZoom={19} 
             />
-            {/* 2. Overlay: OpenRailwayMap (Tracks & Signals) */}
             <TileLayer 
                 url="https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png" 
                 attribution='&copy; OpenRailwayMap' 
@@ -494,6 +491,7 @@ export default function Dashboard() {
             <div style={styles.tabHeader}>
               <span style={styles.tab(activeTab === "telemetry")} onClick={() => setActiveTab("telemetry")}>LIVE TELEMETRY</span>
               <span style={styles.tab(activeTab === "health")} onClick={() => setActiveTab("health")}>DEVICE HEALTH</span>
+              <span style={styles.tab(activeTab === "vision")} onClick={() => setActiveTab("vision")}>VISION FEED (AI)</span>
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "10px" }}>
                 <span style={{ fontSize: "0.7rem", color: "#64748b", fontWeight: "600" }}>PLAYBACK:</span>
                 <input type="checkbox" checked={replayMode} onChange={(e) => setReplayMode(e.target.checked)} style={{accentColor: "#3b82f6"}} />
@@ -501,9 +499,8 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {activeTab === "telemetry" ? (
+            {activeTab === "telemetry" && (
               <div style={styles.gridContainer}>
-                {/* 1. VIBRATION */}
                 <div style={styles.chartCard}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
                     <div style={{ fontSize: "0.75rem", fontWeight: "700", color: "#94a3b8" }}>VIBRATION MAGNITUDE</div>
@@ -520,7 +517,6 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* 2. MAGNETIC */}
                 <div style={styles.chartCard}>
                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
                     <div style={{ fontSize: "0.75rem", fontWeight: "700", color: "#94a3b8" }}>MAGNETIC FLUX (µT)</div>
@@ -537,7 +533,6 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* 3. SOUND MONITOR */}
                 <div style={styles.chartCard}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
                     <div style={{ fontSize: "0.75rem", fontWeight: "700", color: "#94a3b8" }}>ACOUSTIC NOISE (dB)</div>
@@ -560,7 +555,6 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* 4. FREQUENCY MONITOR */}
                 <div style={styles.chartCard}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
                     <div style={{ fontSize: "0.75rem", fontWeight: "700", color: "#94a3b8" }}>VIBRATION FREQUENCY (Hz)</div>
@@ -583,7 +577,9 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
               </div>
-            ) : (
+            )}
+
+            {activeTab === "health" && (
               <div style={styles.gridContainer}>
                 <div style={styles.chartCard}>
                   <div style={{ fontSize: "0.75rem", fontWeight: "700", color: "#94a3b8", marginBottom: "10px" }}>TRACK TEMPERATURE</div>
@@ -620,6 +616,42 @@ export default function Dashboard() {
                         <div style={{ width: "100%", height: "8px", background: "#334155", borderRadius: "4px" }}><div style={{ width: "70%", height: "100%", background: "#3b82f6", borderRadius: "4px", boxShadow: "0 0 10px rgba(59,130,246,0.3)" }}></div></div>
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "vision" && (
+              <div style={{ display: "flex", gap: "20px", height: "100%" }}>
+                <div style={{ flex: 1, backgroundColor: "#1e293b", borderRadius: "12px", border: "1px solid #334155", padding: "15px", display: "flex", flexDirection: "column" }}>
+                    <div style={{ fontSize: "0.75rem", fontWeight: "700", color: "#94a3b8", marginBottom: "10px" }}>LIVE CAMERA FEED (ANALYSIS)</div>
+                    <div style={{ flex: 1, backgroundColor: "#020617", borderRadius: "8px", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #475569" }}>
+                        {alerts[0]?.vlmImage ? (
+                            <img 
+                                src={`${PYTHON_AI_URL}/${alerts[0].vlmImage}`} 
+                                alt="Visual Evidence" 
+                                style={{ width: "100%", height: "100%", objectFit: "contain" }} 
+                            />
+                        ) : (
+                            <div style={{ textAlign: "center", color: "#475569" }}>
+                                <p style={{ fontSize: "2rem" }}>📸</p>
+                                <p style={{ fontSize: "0.8rem" }}>Searching for visual threats...</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <div style={{ width: "35%", display: "flex", flexDirection: "column", gap: "15px" }}>
+                    <div style={{ ...styles.kpiCard, flex: 1 }}>
+                        <div style={styles.kpiLabel}>AI Reasoning</div>
+                        <p style={{ marginTop: "10px", fontSize: "0.9rem", color: "#cbd5e1", fontStyle: "italic", lineHeight: "1.4" }}>
+                            "{alerts[0]?.vlmReason || "The system is currently scanning for physical tampering or human presence near the tracks."}"
+                        </p>
+                    </div>
+                    <div style={styles.kpiCard}>
+                        <div style={styles.kpiLabel}>Confidence Score</div>
+                        <div style={{ ...styles.kpiValue, color: "#60a5fa" }}>
+                            {alerts[0]?.vlmConfidence ? (alerts[0].vlmConfidence * 100).toFixed(1) + "%" : "0.0%"}
+                        </div>
+                    </div>
                 </div>
               </div>
             )}
