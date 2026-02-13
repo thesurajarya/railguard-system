@@ -6,3 +6,8 @@ pydantic
 matplotlib
 scipy
 scikit-learn
+opencv-python
+torch
+torchvision
+transformers
+tensorflow

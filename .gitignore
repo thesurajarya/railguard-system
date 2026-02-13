@@ -5,6 +5,7 @@ node_modules/
 # Python
 __pycache__/
 venv/
+venv_3.11/
 
 # Arduino
 *.bin
